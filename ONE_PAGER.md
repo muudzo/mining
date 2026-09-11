@@ -6,11 +6,19 @@
 
 ## Headline Number
 
-**Cross-tile PR-AUC: 0.453** (leave-one-tile-out CV, Great Dyke, Zimbabwe)
+**The audit protocol is real and reproducible today.** Run `geomine audit
+benchmark/dataset.parquet benchmark/model.joblib --block-size-km 25.0` and
+the certificate hash will match ours: `c8bd3fd2...` (full hash in
+[BENCHMARK.md](BENCHMARK.md)). That command runs against real Great Dyke
+deposit coordinates and two geology-derived features, five of five tests,
+Grade A.
 
-Class prior: 0.226. Random CV: 0.612. Leakage gap: 0.159. Grade A on the 5-test audit protocol.
-
-Reproduce it: `geomine audit data/benchmark/dataset.parquet data/benchmark/model.joblib` -- the certificate hash will match if the run is real.
+**The targeting result is a promising early number, not a finished claim.**
+Cross-tile PR-AUC 0.453 (leave-one-tile-out CV) on 17 labelled deposits.
+Class prior 0.124-0.226 depending on sampling. This number has not yet been
+run through the audit protocol above and has no published confidence
+interval -- see [BENCHMARK.md](BENCHMARK.md) for exactly what is and is not
+established about it.
 
 ## What It Does
 

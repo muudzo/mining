@@ -186,6 +186,15 @@ def _random_cv_score(
     n_folds: int,
     random_state: int,
 ) -> float:
+    min_class_count = int(np.bincount(y).min())
+    if min_class_count < 2:
+        return float("nan")
+    # StratifiedKFold raises rather than degrading gracefully if a class has
+    # fewer members than n_splits. Small exploration datasets (the product's
+    # own benchmark has 17 deposits total) can easily have a minority class
+    # smaller than the default 5 folds, so this must clamp, matching the
+    # graceful degradation _spatial_cv_score already does for spatial blocks.
+    n_folds = min(n_folds, min_class_count)
     skf = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=random_state)
     preds = np.full(len(y), np.nan)
     for train_idx, test_idx in skf.split(X, y):
@@ -281,10 +290,24 @@ def _bootstrap_stability(
     negligible = (means <= 1e-12) & (ci_width <= 1e-12)
     stable = negligible | (rel_ci <= max_rel_ci)
 
-    result["criterion"] = "relative_ci_width"
+    # Weight by importance rather than counting features equally. An unimportant
+    # feature whose tiny importance jitters between resamples says nothing about
+    # whether the model is trustworthy, but counting it equally would sink a
+    # model that rests on one rock-solid feature plus a few irrelevant ones.
+    # The question that matters is whether the features actually driving the
+    # prediction hold still.
+    total = float(means.sum())
+    if total > 0:
+        stable_fraction = float(means[stable].sum() / total)
+    else:
+        stable_fraction = float(stable.mean())
+
+    result["criterion"] = "importance_weighted_relative_ci_width"
     result["max_rel_ci"] = max_rel_ci
     result["relative_ci_width_per_feature"] = rel_ci.tolist()
-    result["stable_fraction"] = float(stable.mean())
+    result["mean_importance_per_feature"] = means.tolist()
+    result["unweighted_stable_fraction"] = float(stable.mean())
+    result["stable_fraction"] = stable_fraction
     return result
 
 
@@ -564,13 +587,20 @@ def audit(
         detail=boot,
     )
 
-    # Test 4: calibration -- fit on all data, evaluate on a holdout fold
-    skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=cfg.random_state)
-    train_idx, test_idx = next(iter(skf.split(X, y)))
-    cal_model = clone(model)
-    cal_model.fit(X[train_idx], y[train_idx])
-    cal_probs = cal_model.predict_proba(X[test_idx])[:, 1]
-    ece = _calibration_ece(y[test_idx], cal_probs, cfg.calibration_n_bins)
+    # Test 4: calibration -- fit on all data, evaluate on a holdout fold.
+    # Clamped the same way as the random-CV split above: an unclamped
+    # n_splits=5 crashes outright on a dataset with a minority class smaller
+    # than 5, which real exploration datasets routinely have.
+    cal_n_folds = min(5, int(np.bincount(y).min()))
+    if cal_n_folds < 2:
+        ece = float("nan")
+    else:
+        skf = StratifiedKFold(n_splits=cal_n_folds, shuffle=True, random_state=cfg.random_state)
+        train_idx, test_idx = next(iter(skf.split(X, y)))
+        cal_model = clone(model)
+        cal_model.fit(X[train_idx], y[train_idx])
+        cal_probs = cal_model.predict_proba(X[test_idx])[:, 1]
+        ece = _calibration_ece(y[test_idx], cal_probs, cfg.calibration_n_bins)
     calibration_test = TestResult(
         name="calibration",
         passed=ece <= cfg.calibration_max_ece,

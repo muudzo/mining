@@ -46,6 +46,11 @@ credentials.json
 *.h5
 *.pt
 
+# Exception: the public audit benchmark model is small (a two-feature
+# logistic regression, a few KB) and is the artifact the reproducibility
+# claim depends on -- it must be committed, not ignored.
+!benchmark/model.joblib
+
 # Training data zips
 prithvi_training_data.zip
 *.zip

@@ -10,7 +10,17 @@ someone else runs it.
 Verdicts are FALSE (contradicted by the code), UNSUPPORTED (no artifact exists either way),
 UNVERIFIED (an external fact not checked here), or OK.
 
-**Summary:** 6 FALSE, 4 UNSUPPORTED, 5 UNVERIFIED, 3 OK.
+**Summary:** 6 FALSE, 4 UNSUPPORTED, 5 UNVERIFIED, 3 OK, as found on 10 September.
+
+**Update, 11 September:** F2, F3 and F4 are fixed and independently verified -- the
+reproduction command now works, a real certificate is published, and the certificate
+binds the model and is stable across environments. F1 (the Prithvi claim) and F5/F6
+(what each endpoint actually does) are corrected in BENCHMARK.md, README.md and
+the API's own docstrings. U1/U2 (the unsupported "5/5, Grade A" figures for the ViT)
+have been removed rather than substantiated, since no artifact justifying them was
+found. U3/U4 (seeding and confidence intervals for the 0.453 figure) remain open.
+See LAUNCH_PLAN.md's "Status as of 11 September" section for the full list of what
+changed and what is still outstanding.
 
 ---
 

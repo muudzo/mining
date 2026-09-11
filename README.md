@@ -139,14 +139,20 @@ configurations that failed.
 
 ### Reproducing it
 
-A pinned benchmark dataset and model artifact, together with the published certificate hash,
-are **in preparation** and are not yet in this repository. Until they are here, the number
-above is a reported result, not an independently verifiable one, and we would rather say so
-than imply otherwise. Progress on this is tracked as the first blocker in
-[LAUNCH_PLAN.md](LAUNCH_PLAN.md).
+The 0.453 figure above is the targeting model's research result, and it is **not yet what you
+reproduce** -- it has not been run through the audit protocol and has no published confidence
+interval. What you can reproduce today is the protocol itself:
 
-Hash reproducibility currently holds within a single environment. Reproducing a certificate
-across different machines, BLAS backends or library versions is not yet guaranteed.
+```bash
+geomine audit benchmark/dataset.parquet benchmark/model.joblib --block-size-km 25.0
+```
+
+This runs against 17 real, named Great Dyke deposits and two geology-derived features, and
+prints a certificate that matches the one published in [BENCHMARK.md](BENCHMARK.md) exactly,
+on any machine. The certificate hashes the protocol version, the model's class and parameters,
+the data, and the quantised result, so it is not sensitive to BLAS backend, thread count, or
+floating-point drift between machines the way a raw-float hash would be. That is the whole
+point: run it yourself and check.
 
 ---
 

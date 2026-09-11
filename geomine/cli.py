@@ -8,9 +8,20 @@ from pathlib import Path
 
 import click
 
-from geomine.utils.config import load_config, get_aoi_geometry
-
 logger = logging.getLogger("geomine")
+
+# geomine.utils.config imports shapely at module level, which pulls in the
+# full GDAL-adjacent geospatial stack. `geomine audit` (and the API's audit
+# endpoint) must run without that stack installed -- the audit product is
+# deliberately dependency-light so a customer can `pip install geomine[audit]`
+# and verify a certificate without ever touching rasterio/geopandas/shapely.
+# Importing lazily, only inside the pipeline commands that actually need AOI
+# geometry, keeps that promise instead of breaking it at CLI import time.
+
+
+def _load_config_module():
+    from geomine.utils import config as config_module
+    return config_module
 
 
 def setup_logging(verbose: bool = False) -> None:
@@ -43,7 +54,7 @@ def download(
     copernicus_token: str | None,
 ) -> None:
     """Download satellite data and training labels for an AOI."""
-    config = load_config(config_path)
+    config = _load_config_module().load_config(config_path)
     errors: list[str] = []
 
     if not skip_sentinel:
@@ -79,7 +90,7 @@ def download(
             processed_dir.mkdir(parents=True, exist_ok=True)
             dem_path = processed_dir / "srtm_dem.tif"
 
-            aoi_geom = get_aoi_geometry(config)
+            aoi_geom = _load_config_module().get_aoi_geometry(config)
             mosaic_and_clip(tile_paths, dem_path, aoi_geom, config.get("project", {}).get("crs", "EPSG:32736"))
             logger.info(f"DEM saved to {dem_path}")
         except Exception as e:
@@ -107,7 +118,7 @@ def download(
 @click.argument("config_path", type=click.Path(exists=True))
 def compute_features(config_path: str) -> None:
     """Compute spectral indices and structural features from downloaded data."""
-    config = load_config(config_path)
+    config = _load_config_module().load_config(config_path)
 
     from geomine.spectral.compute import compute_sentinel2_indices, stack_all_features
     from geomine.structural.terrain import compute_slope, compute_aspect, compute_curvature
@@ -217,7 +228,7 @@ def compute_features(config_path: str) -> None:
 @click.argument("config_path", type=click.Path(exists=True))
 def train(config_path: str) -> None:
     """Train mineral prospectivity model with spatial cross-validation."""
-    config = load_config(config_path)
+    config = _load_config_module().load_config(config_path)
 
     import geopandas as gpd
     from geomine.training.sampling import (
@@ -245,7 +256,7 @@ def train(config_path: str) -> None:
     logger.info(f"Loaded {len(deposits_gdf)} deposit records")
 
     # Load AOI
-    aoi_geom = get_aoi_geometry(config)
+    aoi_geom = _load_config_module().get_aoi_geometry(config)
 
     # Compute exploration intensity
     logger.info("Computing exploration intensity proxy...")
@@ -340,7 +351,7 @@ def train(config_path: str) -> None:
 @click.option("--model-path", default=None, help="Path to trained model (default: auto-detect)")
 def predict(config_path: str, model_path: str | None) -> None:
     """Run prediction on the AOI and generate target maps."""
-    config = load_config(config_path)
+    config = _load_config_module().load_config(config_path)
 
     import joblib
     from geomine.predict.inference import predict_raster, cluster_targets, generate_report
@@ -417,7 +428,7 @@ def predict(config_path: str, model_path: str | None) -> None:
 @click.option("--gamma", default=1.2, help="Gamma correction (default 1.2)")
 def layers(config_path: str, preset: str | None, all_presets: bool, bands: str | None, gamma: float) -> None:
     """Render RGB band composite layers for geological interpretation."""
-    config = load_config(config_path)
+    config = _load_config_module().load_config(config_path)
 
     from geomine.spectral.visualize import render_composite, render_all_presets, LAYER_PRESETS
 
@@ -528,6 +539,22 @@ def audit(
         logger.info("JSON report: %s", json_output)
 
     logger.info("Grade: %s | Certificate: %s", result.grade, result.certificate)
+
+
+@main.command("build-benchmark")
+def build_benchmark() -> None:
+    """Rebuild the public audit benchmark (benchmark/dataset.parquet, model.joblib,
+    manifest.json) from committed geology data. Deterministic: re-running this
+    reproduces the same certificate. The published number changes only when
+    this command is re-run and the output is reviewed and committed.
+    """
+    from geomine.benchmark import write_artifacts
+
+    manifest = write_artifacts()
+    logger.info(
+        "Benchmark built: grade=%s certificate=%s",
+        manifest["grade"], manifest["certificate"][:16],
+    )
 
 
 @main.command()

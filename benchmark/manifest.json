@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "scope": "Demonstrates the audit protocol end to end on real Great Dyke deposit coordinates and two geology-derived features. Does NOT reproduce or certify the separate Phase 2 ViT research result (PR-AUC 0.453) -- see CLAIMS_AUDIT.md.",
+  "model_name": "LogisticRegression(dist_to_intrusive_km, dist_to_fault_km)",
+  "n_samples": 137,
+  "n_positives": 17,
+  "geographic_extent": "Great Dyke, Zimbabwe (17 real named deposits + sampled background)",
+  "feature_names": [
+    "dist_to_intrusive_km",
+    "dist_to_fault_km"
+  ],
+  "grade": "A",
+  "passed": true,
+  "summary": {
+    "n_samples": 137,
+    "n_features": 2,
+    "n_positives": 17,
+    "class_prior": 0.12408759124087591,
+    "pr_auc_random_cv": 0.1528833137897628,
+    "pr_auc_spatial_cv": 0.1441291184393969,
+    "spatial_leakage_gap": 0.008754195350365895,
+    "tests_passed": 5,
+    "tests_total": 5,
+    "grade": "A",
+    "gating_test_failed": false,
+    "protocol_version": "v1"
+  },
+  "certificate": "c8bd3fd20d7f29186f447ce05942ead8083495a70787f75365ad37767ed2100b",
+  "how_to_verify": "geomine audit benchmark/dataset.parquet benchmark/model.joblib --block-size-km 25.0",
+  "generated_at": "2026-09-11"
+}

@@ -146,6 +146,53 @@ none of them do. Market research is running on the mandate question now.
 
 ## 2. Launch Blockers (P0 -- nothing ships until these are done)
 
+### Status as of 11 September
+
+The MVP target was narrowed to: the audit protocol runs end to end and
+produces a real, reproducible certificate. That is now true and independently
+verified -- a fresh clone, in an isolated environment, using only the
+published `pip install -e ".[api,audit]"` command, produces the exact
+published certificate hash on the first try. Detail:
+
+- The certificate now binds the model's class and parameters, not just data
+  and scores. Two differently-configured models produce different hashes.
+- The hash is quantised and layout-canonicalised, so it no longer drifts
+  across BLAS backends or array memory order. Confirmed empirically.
+- The five protocol tests were hardened: block size is bounded and can no
+  longer be gamed toward a false pass, calibration is still measured on a
+  random split (not yet fixed -- see below), tree-model bootstrap stability
+  now uses importance-weighted CI width instead of a sign test that always
+  passed, spatial leakage and feature-label leakage now gate the grade
+  instead of being weighted equally with the other three, and lon/lat
+  coordinates are rejected outright instead of silently degrading to
+  garbage. 64 tests pass, 95% coverage on `geomine/audit` and `geomine/api`.
+- `/v1/benchmark` serves a real certificate loaded from a manifest, not the
+  string `"pending-recompute"`. `/v1/audit` no longer coerces an
+  uncomputable score to a false 0.0, forwards the detail a customer needs to
+  know why a test failed, validates shape and finiteness before numpy sees
+  the data, and bounds rows/features/bootstrap count against the DoS every
+  review flagged.
+- `pyproject.toml` was restructured: `pip install -e ".[api,audit]"` now
+  installs a genuinely lean ~420MB stack with zero GDAL/geospatial
+  dependencies, not the previous ~1.5-2.5GB unconditional install. This also
+  fixed an undeclared dependency bug -- `pandas`/`pyarrow` were never listed
+  under the `audit` extra despite the CLI needing them to read a parquet
+  file, which meant the published install command could not actually run
+  the published verification command in a clean environment.
+- The public benchmark artifact (`benchmark/dataset.parquet`,
+  `benchmark/model.joblib`, `benchmark/manifest.json`) uses the 17 real,
+  named Great Dyke deposits already committed to this repo, plus two
+  features computed from real committed geology data. It does not attempt
+  to reproduce the Phase 2 ViT result, and BENCHMARK.md now says so
+  explicitly, alongside the corrected Prithvi claim (see CLAIMS_AUDIT.md).
+
+Still open, not done in this pass: authentication and per-key rate limiting
+on the API (there is no billing story yet, so no one is being metered
+either), the sync/job-queue question for `/v1/audit` under real concurrent
+load, Docker and CI, and the calibration test's use of a random rather than
+spatial holdout. None of these block the "run it yourself and check"
+demonstration; they block a public, paid, internet-facing launch.
+
 ### P0-1: Make the reproducibility claim true
 
 The single highest-value work in this plan. Required:

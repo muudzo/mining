@@ -8,6 +8,35 @@ version = "0.1.0"
 description = "Satellite-powered mineral prediction engine"
 requires-python = ">=3.11"
 dependencies = [
+    "click>=8.1",
+]
+# Deliberately minimal: this is what `import geomine` and the CLI entry
+# point need to exist at all. Everything else is an extra, chosen so that
+# `pip install -e ".[api,audit]"` -- the command this repo's own docs publish
+# for verifying the audit certificate -- installs a lean, GDAL-free stack in
+# line with what geomine.audit and geomine.api actually import, rather than
+# unconditionally pulling in the ~1.5GB raster/geospatial pipeline stack no
+# audit customer needs. See LAUNCH_PLAN.md / the architecture review for the
+# fuller extras breakdown (geo/ml/vit) this can grow into.
+
+[project.optional-dependencies]
+# The audit product's real dependency surface: geomine.audit.core imports
+# only numpy and scikit-learn; the CLI's `audit` command additionally reads
+# parquet/csv via pandas (+ pyarrow for parquet) and loads models via joblib.
+audit = [
+    "numpy>=1.24",
+    "scipy>=1.11",
+    "scikit-learn>=1.3",
+    "pandas>=2.0",
+    "pyarrow>=14.0",
+    "joblib>=1.3",
+    "pyyaml>=6.0",
+]
+api = ["fastapi>=0.110", "uvicorn[standard]>=0.27", "pydantic>=2.5"]
+# The full geospatial data/ML pipeline (ingest, spectral, structural,
+# training, predict, layers). Needed for `download`, `compute-features`,
+# `train`, `predict`, `layers`, `run-all` -- not for `audit` or the API.
+geo = [
     "numpy>=1.24",
     "scipy>=1.11",
     "rasterio>=1.3",
@@ -23,15 +52,12 @@ dependencies = [
     "matplotlib>=3.8",
     "pystac-client>=0.7",
     "requests>=2.31",
-    "click>=8.1",
     "pyyaml>=6.0",
     "tqdm>=4.66",
+    "pandas>=2.0",
+    "pyarrow>=14.0",
 ]
-
-[project.optional-dependencies]
-dev = ["pytest>=7.4", "jupyter>=1.0", "ipykernel>=6.25"]
-api = ["fastapi>=0.110", "uvicorn[standard]>=0.27", "pydantic>=2.5"]
-audit = ["joblib>=1.3"]
+dev = ["pytest>=7.4", "pytest-cov>=4.1", "httpx>=0.27", "jupyter>=1.0", "ipykernel>=6.25"]
 
 [project.scripts]
 geomine = "geomine.cli:main"
