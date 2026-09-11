@@ -37,6 +37,23 @@ from sklearn.model_selection import StratifiedKFold
 
 logger = logging.getLogger(__name__)
 
+PROTOCOL_VERSION = "v1"
+"""Version of the audit protocol.
+
+Embedded in every certificate. A change to any test, threshold or hashing rule
+requires bumping this, so a certificate always says which protocol produced it.
+"""
+
+HASH_DECIMALS = 6
+"""Precision at which floats are quantised before hashing.
+
+Cross-validation scores are outputs of floating-point model fitting, so their
+last bits depend on the BLAS backend, thread count and library versions. Drift
+at that level is around 1e-12. Rounding to 1e-6 sits far above the noise and
+far below any precision we would report, which is what makes the certificate
+reproducible on a different machine rather than only on the one that made it.
+"""
+
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -66,6 +83,24 @@ class AuditConfig:
     """Max expected calibration error."""
 
     random_state: int = 42
+
+    unsigned_importance_max_rel_ci: float = 1.0
+    """Stability bar for models exposing non-negative importances.
+
+    Sign consistency is meaningless for tree-ensemble importances, which are
+    non-negative by construction, so a sign test passes for every feature and
+    measures nothing. For those models a feature counts as stable when the
+    width of its bootstrap 95% interval is no greater than this multiple of
+    its mean importance.
+    """
+
+    allow_degree_coords: bool = False
+    """Permit coordinates that look like longitude/latitude.
+
+    Spatial blocking requires projected metres. Degrees collapse every point
+    into one block, which silently turns spatial CV back into no CV at all.
+    The audit refuses degree-shaped coordinates unless this is set.
+    """
 
 
 # ---------------------------------------------------------------------------
@@ -172,11 +207,13 @@ def _bootstrap_stability(
     y: np.ndarray,
     n_bootstrap: int,
     random_state: int,
+    max_rel_ci: float = 1.0,
 ) -> dict[str, Any]:
     rng = np.random.default_rng(random_state)
     n = len(y)
 
     importances: list[np.ndarray] = []
+    signed = True
     for _ in range(n_bootstrap):
         idx = rng.integers(0, n, size=n)
         if len(np.unique(y[idx])) < 2:
@@ -187,33 +224,68 @@ def _bootstrap_stability(
         if hasattr(m, "coef_"):
             importances.append(np.asarray(m.coef_).ravel())
         elif hasattr(m, "feature_importances_"):
+            signed = False
             importances.append(np.asarray(m.feature_importances_))
         else:
-            return {"supported": False, "stable_fraction": float("nan")}
+            return {
+                "supported": False,
+                "stable_fraction": float("nan"),
+                "reason": (
+                    f"{type(model).__name__} exposes neither coef_ nor "
+                    "feature_importances_, so bootstrap stability cannot be measured."
+                ),
+            }
 
     if not importances:
-        return {"supported": False, "stable_fraction": float("nan")}
+        return {
+            "supported": False,
+            "stable_fraction": float("nan"),
+            "reason": (
+                "Every bootstrap resample was single-class. The positive rate is "
+                "too low to resample meaningfully."
+            ),
+        }
 
     arr = np.vstack(importances)
     n_features = arr.shape[1]
+    ci_lower = np.percentile(arr, 2.5, axis=0)
+    ci_upper = np.percentile(arr, 97.5, axis=0)
 
-    sign_consistency = np.zeros(n_features)
-    for j in range(n_features):
-        col = arr[:, j]
-        pos_frac = (col > 0).mean()
-        sign_consistency[j] = max(pos_frac, 1 - pos_frac)
-
-    stable_fraction = float((sign_consistency >= 0.95).mean())
-
-    return {
+    result: dict[str, Any] = {
         "supported": True,
         "n_features": n_features,
         "n_bootstraps": int(arr.shape[0]),
-        "sign_consistency_per_feature": sign_consistency.tolist(),
-        "stable_fraction": stable_fraction,
-        "ci_lower": np.percentile(arr, 2.5, axis=0).tolist(),
-        "ci_upper": np.percentile(arr, 97.5, axis=0).tolist(),
+        "ci_lower": ci_lower.tolist(),
+        "ci_upper": ci_upper.tolist(),
     }
+
+    if signed:
+        # Coefficients carry a direction, so a flipped sign is the failure mode.
+        sign_consistency = np.zeros(n_features)
+        for j in range(n_features):
+            col = arr[:, j]
+            pos_frac = float((col > 0).mean())
+            sign_consistency[j] = max(pos_frac, 1 - pos_frac)
+        result["criterion"] = "sign_consistency"
+        result["sign_consistency_per_feature"] = sign_consistency.tolist()
+        result["stable_fraction"] = float((sign_consistency >= 0.95).mean())
+        return result
+
+    # Importances are non-negative, so sign tells us nothing. Measure instead
+    # whether each feature's magnitude holds still across resamples.
+    means = arr.mean(axis=0)
+    ci_width = ci_upper - ci_lower
+    scale = np.maximum(means, np.finfo(float).eps)
+    rel_ci = ci_width / scale
+    # A feature that is consistently negligible is stably unimportant, not unstable.
+    negligible = (means <= 1e-12) & (ci_width <= 1e-12)
+    stable = negligible | (rel_ci <= max_rel_ci)
+
+    result["criterion"] = "relative_ci_width"
+    result["max_rel_ci"] = max_rel_ci
+    result["relative_ci_width_per_feature"] = rel_ci.tolist()
+    result["stable_fraction"] = float(stable.mean())
+    return result
 
 
 def _calibration_ece(y_true: np.ndarray, y_prob: np.ndarray, n_bins: int) -> float:
@@ -236,63 +308,148 @@ def _feature_label_leakage(
     X: np.ndarray, y: np.ndarray, threshold: float
 ) -> dict[str, Any]:
     flagged: list[tuple[int, float]] = []
+    correlations: list[float] = []
     n_features = X.shape[1]
+    n_skipped = 0
+
     for j in range(n_features):
         col = X[:, j]
-        if np.std(col) == 0:
-            continue
         valid = ~np.isnan(col)
-        if valid.sum() < 5:
+        # Compute variance on the finite values only. np.std over a column
+        # containing NaN returns NaN, and `NaN == 0` is False, so the original
+        # constant-column guard never fired for a column with any NaN in it.
+        if valid.sum() < 5 or np.std(col[valid]) == 0 or np.std(y[valid]) == 0:
+            n_skipped += 1
             continue
-        corr = np.corrcoef(col[valid], y[valid])[0, 1]
+        corr = float(np.corrcoef(col[valid], y[valid])[0, 1])
+        if not np.isfinite(corr):
+            n_skipped += 1
+            continue
+        correlations.append(abs(corr))
         if abs(corr) >= threshold:
-            flagged.append((j, float(corr)))
+            flagged.append((j, corr))
+
+    # Filter non-finite values explicitly rather than relying on Python's max().
+    # max() over a sequence containing NaN is order-dependent: max([nan, 0.5])
+    # returns nan but max([0.5, nan]) returns 0.5, so a single degenerate
+    # feature could poison the whole result depending on its column position.
+    max_abs_corr = max(correlations) if correlations else 0.0
+
     return {
         "n_features": n_features,
+        "n_skipped_features": n_skipped,
         "threshold": threshold,
         "flagged": flagged,
-        "max_abs_corr": float(
-            max(
-                (abs(np.corrcoef(X[:, j][~np.isnan(X[:, j])], y[~np.isnan(X[:, j])])[0, 1])
-                 for j in range(n_features) if np.std(X[:, j]) > 0),
-                default=0.0,
-            )
-        ),
+        "max_abs_corr": float(max_abs_corr),
+    }
+
+
+def _quantize(obj: Any, decimals: int = HASH_DECIMALS) -> Any:
+    """Round every float in a nested structure to a fixed precision."""
+    if isinstance(obj, float):
+        if not np.isfinite(obj):
+            return str(obj)
+        return round(obj, decimals)
+    if isinstance(obj, (np.floating, np.integer)):
+        return _quantize(obj.item(), decimals)
+    if isinstance(obj, dict):
+        return {k: _quantize(v, decimals) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_quantize(v, decimals) for v in obj]
+    return obj
+
+
+def _array_digest(a: np.ndarray, decimals: int | None = HASH_DECIMALS) -> str:
+    """Digest an array by content rather than by memory layout.
+
+    ``ndarray.tobytes()`` serialises the buffer as laid out, so the same values
+    in Fortran order hash differently from C order, and float noise in the last
+    bits changes the digest. Canonicalise both before hashing.
+    """
+    a = np.ascontiguousarray(a)
+    if decimals is not None and np.issubdtype(a.dtype, np.floating):
+        a = np.round(a, decimals)
+    return hashlib.sha256(a.tobytes() + str(a.dtype).encode() + str(a.shape).encode()).hexdigest()
+
+
+def _model_fingerprint(model: Any) -> dict[str, str]:
+    """Identify the audited model by class and hyperparameters.
+
+    Without this the certificate says nothing about what was audited, and any
+    model can be swapped behind a published hash undetected.
+    """
+    cls = type(model)
+    try:
+        params = model.get_params(deep=True)
+    except Exception:  # not an sklearn estimator
+        params = {}
+    return {
+        "class": f"{cls.__module__}.{cls.__qualname__}",
+        "params": json.dumps(_quantize(params), sort_keys=True, default=str),
     }
 
 
 def _certificate(
     config: AuditConfig,
+    model: Any,
     X: np.ndarray,
     y: np.ndarray,
     coords: np.ndarray,
     scores: dict[str, Any],
 ) -> str:
-    """Content-addressed hash of inputs + outputs.
+    """Content-addressed hash of the protocol, the model, the data and the result.
 
-    Same inputs + same model -> same hash. Customers publish the hash;
-    auditors recompute it from the same data to verify the audit was real.
+    Reproducibility contract: the same protocol version, the same model class
+    and hyperparameters, the same data and the same resulting scores produce
+    the same hash, on any machine. Scores are quantised before hashing so that
+    floating-point drift between BLAS backends does not change the result, and
+    arrays are canonicalised so that memory layout does not either.
+
+    What this does NOT cover: fitted weights. Two models of the same class and
+    hyperparameters, fitted to the same data, are treated as the same model.
+    That is the intended granularity, since the audit refits the model itself.
     """
-    h = hashlib.sha256()
-    h.update(json.dumps(asdict(config), sort_keys=True).encode())
-    h.update(hashlib.sha256(X.tobytes()).digest())
-    h.update(hashlib.sha256(y.tobytes()).digest())
-    h.update(hashlib.sha256(coords.tobytes()).digest())
-    h.update(json.dumps(scores, sort_keys=True, default=str).encode())
-    return h.hexdigest()
+    payload = {
+        "protocol_version": PROTOCOL_VERSION,
+        "config": _quantize(asdict(config)),
+        "model": _model_fingerprint(model),
+        "data": {
+            "X": _array_digest(X),
+            "y": _array_digest(np.asarray(y, dtype=np.int64), decimals=None),
+            "coords": _array_digest(coords),
+        },
+        "scores": _quantize(scores),
+    }
+    encoded = json.dumps(payload, sort_keys=True, default=str).encode()
+    return hashlib.sha256(encoded).hexdigest()
 
 
-def _grade(passed_count: int, total: int) -> str:
+GATING_TESTS = ("spatial_leakage", "feature_label_leakage")
+"""Tests that cap the grade when they fail.
+
+Spatial leakage is the entire reason this protocol exists, and feature-label
+leakage means the result is circular. Passing four of five is not a B when the
+one failure is either of these. Weighting every test equally would let a model
+exhibiting the exact failure the product detects still earn a good grade.
+"""
+
+
+def _grade(passed_count: int, total: int, gating_failed: bool = False) -> str:
     ratio = passed_count / total if total else 0
     if ratio == 1.0:
-        return "A"
-    if ratio >= 0.8:
-        return "B"
-    if ratio >= 0.6:
-        return "C"
-    if ratio >= 0.4:
+        grade = "A"
+    elif ratio >= 0.8:
+        grade = "B"
+    elif ratio >= 0.6:
+        grade = "C"
+    elif ratio >= 0.4:
+        grade = "D"
+    else:
+        grade = "F"
+
+    if gating_failed and grade in ("A", "B", "C"):
         return "D"
-    return "F"
+    return grade
 
 
 # ---------------------------------------------------------------------------
@@ -338,6 +495,31 @@ def audit(
         raise ValueError("X, y, coords_xy shapes are inconsistent")
     if set(np.unique(y).tolist()) - {0, 1}:
         raise ValueError("y must be binary 0/1")
+    if len(np.unique(y)) < 2:
+        raise ValueError(
+            "y contains only one class. An audit needs both positives and negatives."
+        )
+    if cfg.block_size_km <= 0:
+        raise ValueError("block_size_km must be positive")
+    if not np.isfinite(coords_xy).all():
+        raise ValueError("coords_xy contains non-finite values")
+
+    # Spatial blocking assumes projected metres. Degrees put every point in a
+    # single block, which silently degrades spatial CV into no holdout at all
+    # and reports a failing score for the wrong reason. Refuse rather than
+    # return a confidently wrong grade.
+    if not cfg.allow_degree_coords:
+        looks_like_degrees = (
+            np.abs(coords_xy[:, 0]).max() <= 180.0
+            and np.abs(coords_xy[:, 1]).max() <= 90.0
+        )
+        if looks_like_degrees:
+            raise ValueError(
+                "coords_xy looks like longitude/latitude degrees, but spatial "
+                "blocking requires projected metres (e.g. UTM). Reproject first, "
+                "or set allow_degree_coords=True if this is genuinely a metric "
+                "grid within these bounds."
+            )
 
     prior = float(y.mean())
     logger.info("Audit start: n=%d, positives=%d, prior=%.3f", len(y), y.sum(), prior)
@@ -370,7 +552,10 @@ def audit(
     )
 
     # Test 3: bootstrap stability
-    boot = _bootstrap_stability(model, X, y, cfg.n_bootstrap, cfg.random_state)
+    boot = _bootstrap_stability(
+        model, X, y, cfg.n_bootstrap, cfg.random_state,
+        max_rel_ci=cfg.unsigned_importance_max_rel_ci,
+    )
     bootstrap_test = TestResult(
         name="bootstrap_stability",
         passed=bool(boot.get("supported") and boot["stable_fraction"] >= 0.5),
@@ -418,7 +603,8 @@ def audit(
         feature_leakage_test,
     ]
     passed_count = sum(1 for t in tests if t.passed)
-    grade = _grade(passed_count, len(tests))
+    gating_failed = any(t.name in GATING_TESTS and not t.passed for t in tests)
+    grade = _grade(passed_count, len(tests), gating_failed=gating_failed)
 
     summary = {
         "n_samples": int(len(y)),
@@ -431,9 +617,11 @@ def audit(
         "tests_passed": passed_count,
         "tests_total": len(tests),
         "grade": grade,
+        "gating_test_failed": gating_failed,
+        "protocol_version": PROTOCOL_VERSION,
     }
 
-    cert = _certificate(cfg, X, y, coords_xy, summary)
+    cert = _certificate(cfg, model, X, y, coords_xy, summary)
 
     elapsed = time.time() - started
     logger.info(
