@@ -9,6 +9,25 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from geomine.api.limits import enforce_rate_limit, reset_rate_limiter
+from geomine.api.main import app
+
+
+@pytest.fixture(autouse=True)
+def _api_auth_bypass(request):
+    """Bypass X-API-Key auth and rate limiting for every test except ones
+    marked ``real_auth``, which exist specifically to exercise that
+    dependency. Also resets rate-limiter state between tests so a shared
+    key id (e.g. "test-key") cannot trip the limit across unrelated tests.
+    """
+    reset_rate_limiter()
+    if "real_auth" in request.keywords:
+        yield
+        return
+    app.dependency_overrides[enforce_rate_limit] = lambda: "test-key"
+    yield
+    app.dependency_overrides.pop(enforce_rate_limit, None)
+
 
 def _positional_basis(coords: np.ndarray, rng: np.random.Generator, k: int, scale: float) -> np.ndarray:
     """A bank of Gaussian bumps centred at random points.

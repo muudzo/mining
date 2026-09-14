@@ -186,12 +186,74 @@ published certificate hash on the first try. Detail:
   to reproduce the Phase 2 ViT result, and BENCHMARK.md now says so
   explicitly, alongside the corrected Prithvi claim (see CLAIMS_AUDIT.md).
 
-Still open, not done in this pass: authentication and per-key rate limiting
-on the API (there is no billing story yet, so no one is being metered
-either), the sync/job-queue question for `/v1/audit` under real concurrent
-load, Docker and CI, and the calibration test's use of a random rather than
-spatial holdout. None of these block the "run it yourself and check"
-demonstration; they block a public, paid, internet-facing launch.
+Still open, not done in this pass: Docker and CI, and the calibration
+test's use of a random rather than spatial holdout. None of these block the
+"run it yourself and check" demonstration; they block a public, paid,
+internet-facing launch.
+
+### Update, P0-3 (API auth and rate limiting)
+
+`/v1/audit` and `/v1/score` now require an `X-API-Key` header
+(`geomine/api/auth.py`), validated against `GEOMINE_API_KEYS` with
+constant-time comparison and failing closed (503) if no keys are
+configured -- there is still no billing system behind this, so keys are
+issued by hand for now, which is sufficient for "one real audit delivered,
+free if necessary." Each key is rate-limited independently
+(`geomine/api/limits.py`, default 20 req/min, `GEOMINE_RATE_LIMIT_PER_MINUTE`
+to override), and a single `/v1/audit` call is bounded to 30 wall-clock
+seconds. `/v1/benchmark` and `/v1/health` stay public and unauthenticated
+on purpose -- the reproducibility demo in the README needs no signup.
+
+Two gaps a security review caught in the first pass are closed, not just
+noted:
+
+- **Request-body size is enforced as bytes actually stream in, not from
+  the caller-supplied `Content-Length` header.** The first version checked
+  only that header, which a client can simply omit (chunked transfer
+  encoding needs no declared length) -- and by the time FastAPI's own
+  `Depends(...)` auth check would reject an unauthenticated caller, it has
+  already read and JSON-parsed the whole body, because body parsing and
+  dependency resolution happen in the same pass, not auth-then-body. A
+  caller who never sends `Content-Length` would have sailed past a
+  header-only check and forced full buffering before any key was checked
+  at all -- exactly the "unauthenticated compute bomb" P0-3 exists to
+  close. `MaxBodySizeMiddleware` is now a raw ASGI middleware that counts
+  real bytes via a wrapped `receive`, independent of any declared length.
+- **A server-wide concurrency cap (`MAX_CONCURRENT_AUDITS = 4`) now bounds
+  audits actually running at once**, not just how often a key may start
+  one. Per-key rate limiting alone doesn't prevent a key whose fit time
+  exceeds its allowed request interval from accumulating concurrently
+  running (including already-timed-out-but-still-executing) background
+  threads faster than the limiter throttles new requests. The cap is
+  released by the future's own completion callback, not by the request
+  handler giving up, so a slot stays held for exactly as long as the
+  computation actually runs.
+
+The sync-vs-job-queue question is decided for launch: **sync, with hard
+bounds**, not a queue. Rows/features/bootstrap count were already bounded;
+auth, rate limiting, streaming body-size enforcement, a concurrency cap and
+a wall-clock timeout close the rest of what a queue would otherwise exist
+to contain at this traffic volume. The timeout is an honest stopgap, not a
+full fix -- Python threads cannot be force-killed, so a timed-out request
+stops holding the HTTP connection but its worker thread keeps running to
+completion in the background (and can delay a graceful process shutdown,
+via `concurrent.futures`' own atexit thread-join hook). A job queue is
+still the correct answer under real concurrent load; nothing here should
+be read as having built that.
+
+One accepted, documented gap: requests that fail auth (missing or wrong
+key) are not rate-limited, since rate limiting sits behind
+`Depends(require_api_key)` and never runs if auth fails first. This is a
+low-urgency gap, not a compute-cost one -- a failed-auth request never
+reaches the expensive audit path, so the exposure is a cheap
+`hmac.compare_digest` loop, not compute or memory. Left open for this
+pass; a coarse per-IP throttle ahead of auth would close it if key-guessing
+traffic becomes a real problem.
+
+98 tests pass at 96% coverage on `geomine/audit` and `geomine/api`
+(100% on `auth.py` and `limits.py`). Reviewed by both a security-reviewer
+and a code-reviewer pass; the two HIGH findings above were fixed, not just
+logged, before this was called done.
 
 ### P0-1: Make the reproducibility claim true
 
@@ -218,22 +280,24 @@ launch.** We do not ship a promise we cannot keep. A weaker true claim beats a s
 `tests/` contains a `.gitkeep`. We are selling correctness assurance with zero automated proof
 of our own correctness. That is not survivable under expert scrutiny.
 
-- [ ] Test suite for `geomine/audit/core.py` with adversarial fixtures: known-leaky data must
+- [x] Test suite for `geomine/audit/core.py` with adversarial fixtures: known-leaky data must
       fail the leakage test, clean data must pass, a leaked feature must be flagged, a no-skill
       model must fail the prior test, certificate determinism must hold
-- [ ] Integration tests for every API endpoint and documented error branch
-- [ ] Coverage gate in CI, 80% minimum on `geomine/audit` and `geomine/api`
+- [x] Integration tests for every API endpoint and documented error branch
+- [ ] Coverage gate in CI, 80% minimum on `geomine/audit` and `geomine/api` -- coverage itself
+      is there (96%); there is no CI to gate on it yet (see Track D)
 
 ### P0-3: Do not put an unauthenticated compute bomb on the internet
 
 `/v1/audit` accepts unbounded `X`, `y`, and `n_bootstrap` from anonymous callers and runs
 repeated cross-validation plus bootstrap resampling synchronously in the request handler.
 
-- [ ] API key authentication with per-key quotas
-- [ ] Hard bounds on rows, features, `n_bootstrap`, request body size, and wall-clock time
-- [ ] Rate limiting
-- [ ] Decide sync-with-limits vs job queue (security and API reviews are costing both)
-- [ ] Remove the personal email address from the `/v1/score` 501 response body
+- [x] API key authentication with per-key quotas
+- [x] Hard bounds on rows, features, `n_bootstrap`, request body size, and wall-clock time
+- [x] Rate limiting
+- [x] Decide sync-with-limits vs job queue (security and API reviews are costing both) --
+      decided: sync with hard bounds for launch, see the P0-3 update above
+- [x] Remove the personal email address from the `/v1/score` 501 response body
 
 ---
 
@@ -393,31 +457,37 @@ takes longer than 20 days to land, so it is a launch-adjacent play, not a launch
 
 What excellent technical B2B products have on day one, scored against where we are.
 
+Restated 11 September against the actual repository, after P0-1, P0-2 and P0-3 landed. The
+original version of this table was written on 10 September and went stale within a day; rows
+are now checked against what is in the tree rather than what was true when it was typed.
+
 | Requirement | State | Owner |
 |---|---|---|
-| README -- the front door | **Missing entirely** | P0 |
-| Quickstart that delivers value in <5 min | Missing | P0-1 |
-| Live API docs beyond raw OpenAPI | Partial, marketing copy in the description field | Track C |
-| Reproducible claims | **Broken** | P0-1 |
-| Public landing page | **Does not exist** | Track F |
-| Demo requiring no signup | Missing | Track F |
-| Auth and quotas | **Missing** | P0-3 |
-| Rate limiting | **Missing** | P0-3 |
+| README -- the front door | **Done** -- README.md, with install, audit, CLI and API sections | P0 |
+| Quickstart that delivers value in <5 min | **Done** -- `pip install -e ".[api,audit]"` then one `geomine audit` command reproduces the published hash | P0-1 |
+| Live API docs beyond raw OpenAPI | Partial, marketing copy still in the FastAPI description field | Track C |
+| Reproducible claims | **Done** -- certificate reproduced from a fresh clone in a clean environment | P0-1 |
+| Public landing page | **Does not exist** -- no web assets in the repo at all | Track F |
+| Demo requiring no signup | Partial -- `/v1/benchmark` and the CLI reproduction need no key, but nothing is hosted yet | Track F |
+| Auth and quotas | **Done** -- `X-API-Key` via `GEOMINE_API_KEYS`, fails closed | P0-3 |
+| Rate limiting | **Done** -- per-key sliding window, plus a concurrency cap and a wall-clock timeout | P0-3 |
 | Versioned API and changelog | `/v1` exists, no changelog | Track C |
-| Test suite and CI | **Missing** | P0-2 |
+| Test suite and CI | Partial -- 98 tests at 96% coverage on `geomine/audit` + `geomine/api`; **no CI to gate on it** | P0-2 / Track D |
 | Error monitoring | Missing | Track D |
-| Structured logging | Logger created, never used | Track C |
-| Status and uptime visibility | Missing | Track D |
+| Structured logging | Logger still created and never called | Track C |
+| Status and uptime visibility | Missing -- `/v1/health` exists, nothing watches it | Track D |
 | Security and data-handling statement | Missing -- customers upload proprietary data | Track B |
 | Terms of service and privacy policy | Missing | Legal |
 | Invoicing and payment rails | Missing | Legal / H5 |
 | Contract or SOW template | Missing | Legal |
-| Support channel and response commitment | Personal email in a 501 body | Track F |
+| Support channel and response commitment | A personal email in ONE_PAGER.md, no response commitment | Track F |
 | Pricing presentation | In a markdown file, not on a page | Track F |
 | Funnel analytics | Missing | Track F |
 
-The pattern is clear. The science and the pipeline are strong; **everything a stranger touches
-is missing.** That is the 20 days.
+The engineering half of this table is now largely closed: the product is installable,
+reproducible, tested and no longer open to the internet. **What remains is almost entirely the
+commercial and operational half** -- a page to land on, a way to sign a contract, a way to get
+paid, and a way to know the service is up. That, plus CI, is the rest of the 20 days.
 
 ---
 

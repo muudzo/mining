@@ -10,13 +10,17 @@ from __future__ import annotations
 
 import logging
 import math
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeoutError
 from typing import Any, Literal
 
 import numpy as np
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
-from geomine.audit import AuditConfig, audit as run_audit
+from geomine.api.limits import MaxBodySizeMiddleware, enforce_rate_limit
+from geomine.audit import AuditConfig, AuditResult, audit as run_audit
 from geomine.benchmark import load_manifest
 
 MAX_ROWS = 5_000
@@ -28,6 +32,35 @@ unbounded n_bootstrap or row count is a trivial way to pin the server. These
 are launch-stopgap bounds sized for real exploration datasets, not a
 substitute for the job-queue architecture recommended for the next phase."""
 
+MAX_BODY_BYTES = 16 * 1024 * 1024
+"""Generous headroom over the worst-case in-bounds /v1/audit payload (~12MB
+of JSON floats at MAX_ROWS x MAX_FEATURES), enforced ahead of routing by
+MaxBodySizeMiddleware."""
+
+AUDIT_TIMEOUT_SECONDS = 30.0
+"""Wall-clock budget for a single /v1/audit request. This is a launch
+stopgap, not a substitute for the job-queue architecture the sync-vs-queue
+decision in LAUNCH_PLAN.md P0-3 ultimately needs: Python threads cannot be
+forcibly killed, so a timed-out audit's worker thread keeps running in the
+background (consuming CPU, holding no request open) until it finishes on its
+own. The bound protects the HTTP response time, not server CPU -- and it can
+still delay a *graceful* process shutdown, because concurrent.futures
+registers a process-wide atexit hook that joins every thread it has ever
+spawned; an orphaned fit can make uvicorn's shutdown wait for it to finish.
+An operator that SIGKILLs after a grace period already bounds that."""
+
+MAX_CONCURRENT_AUDITS = 4
+"""Hard cap on audits actually running at once, including ones whose HTTP
+response already timed out and returned 504 -- that request's worker thread
+is still consuming a CPU core. Rate limiting bounds how often a key may
+*start* a new audit; it does not bound how many previously-accepted fits
+are still in flight if fit time exceeds the interval between allowed
+requests, which is exactly the gap between "no new requests admitted" and
+"no compute happening." This is a concurrency cap, not a queue: once at
+capacity, a new request is rejected immediately (503) rather than queued."""
+
+_audit_slots = threading.BoundedSemaphore(MAX_CONCURRENT_AUDITS)
+
 logger = logging.getLogger("geomine.api")
 
 app = FastAPI(
@@ -38,6 +71,7 @@ app = FastAPI(
     ),
     version="0.1.0",
 )
+app.add_middleware(MaxBodySizeMiddleware, max_bytes=MAX_BODY_BYTES)
 
 
 # ---------------------------------------------------------------------------
@@ -189,9 +223,58 @@ def benchmark() -> BenchmarkResponse:
     )
 
 
+def _run_audit_bounded(
+    model: Any,
+    X: np.ndarray,
+    y: np.ndarray,
+    coords: np.ndarray,
+    feature_names: list[str],
+    config: AuditConfig,
+) -> AuditResult:
+    """Run ``run_audit`` off the request thread, bounded by a server-wide
+    concurrency cap and a wall-clock timeout. Raises the HTTPException the
+    caller should return for every failure mode; on success returns the
+    AuditResult directly.
+    """
+    if not _audit_slots.acquire(blocking=False):
+        raise HTTPException(503, "The audit service is at capacity. Try again shortly.")
+    pool = ThreadPoolExecutor(max_workers=1)
+    future = pool.submit(
+        run_audit, model, X, y, coords, feature_names=feature_names, config=config
+    )
+    # Tied to the future's actual completion, not to whether this request is
+    # still waiting on it -- so a timed-out-but-still-running fit correctly
+    # keeps its slot until it finishes, not until this handler gives up.
+    future.add_done_callback(lambda _f: _audit_slots.release())
+    try:
+        return future.result(timeout=AUDIT_TIMEOUT_SECONDS)
+    except FutureTimeoutError as e:
+        raise HTTPException(
+            504,
+            f"Audit exceeded the {AUDIT_TIMEOUT_SECONDS:.0f}s time budget for "
+            "this launch-stage deployment. Reduce n_bootstrap or row count.",
+        ) from e
+    except ValueError as e:
+        # audit() raises ValueError for input problems it detects itself
+        # (single-class labels, degree-shaped coordinates, non-binary y).
+        # These are client errors, not server errors.
+        raise HTTPException(400, str(e)) from e
+    finally:
+        # wait=False: the timeout above exists to bound the HTTP response,
+        # not to kill the underlying computation (Python threads cannot be
+        # forcibly stopped). Blocking here on shutdown would silently negate
+        # the timeout by waiting for the same runaway fit anyway.
+        pool.shutdown(wait=False)
+
+
 @app.post("/v1/audit", response_model=AuditResponse)
-def audit_endpoint(req: AuditRequest) -> AuditResponse:
+def audit_endpoint(
+    req: AuditRequest, key_id: str = Depends(enforce_rate_limit)
+) -> AuditResponse:
     """Run the GeoMine audit protocol on a customer-supplied dataset.
+
+    Requires an ``X-API-Key`` header (see ``geomine.api.auth``) and is
+    subject to per-key rate limiting (see ``geomine.api.limits``).
 
     The customer ships their own model? Not yet -- this endpoint runs a
     standard logistic regression baseline against their data and reports
@@ -226,18 +309,9 @@ def audit_endpoint(req: AuditRequest) -> AuditResponse:
         block_size_km=req.block_size_km,
         n_bootstrap=req.n_bootstrap,
     )
-    try:
-        result = run_audit(
-            LogisticRegression(max_iter=1000),
-            X, y, coords,
-            feature_names=req.feature_names,
-            config=cfg,
-        )
-    except ValueError as e:
-        # audit() raises ValueError for input problems it detects itself
-        # (single-class labels, degree-shaped coordinates, non-binary y).
-        # These are client errors, not server errors.
-        raise HTTPException(400, str(e)) from e
+    result = _run_audit_bounded(
+        LogisticRegression(max_iter=1000), X, y, coords, req.feature_names, cfg
+    )
 
     return AuditResponse(
         grade=result.grade,
@@ -264,11 +338,14 @@ def audit_endpoint(req: AuditRequest) -> AuditResponse:
 
 
 @app.post("/v1/score", response_model=ScoreResponse)
-def score(req: ScoreRequest) -> ScoreResponse:
+def score(
+    req: ScoreRequest, key_id: str = Depends(enforce_rate_limit)
+) -> ScoreResponse:
     """Score a concession boundary against the GeoMine model.
 
-    Stub: full implementation requires the trained model + cached feature
-    rasters at deploy time. Returns the structure customers will receive.
+    Requires an ``X-API-Key`` header. Stub: full implementation requires the
+    trained model + cached feature rasters at deploy time. Returns the
+    structure customers will receive.
     """
     raise HTTPException(
         status_code=501,

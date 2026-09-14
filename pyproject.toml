@@ -64,3 +64,8 @@ geomine = "geomine.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["geomine*"]
+
+[tool.pytest.ini_options]
+markers = [
+    "real_auth: exercises the real auth/rate-limit dependency instead of the default test bypass",
+]

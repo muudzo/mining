@@ -108,11 +108,20 @@ geomine audit dataset.parquet model.joblib --output audit.md --json-output audit
 ### API
 
 ```bash
+export GEOMINE_API_KEYS="acme:sk_live_replace_me"  # required for /v1/audit and /v1/score
 uvicorn geomine.api.main:app --port 8000
-curl http://localhost:8000/v1/benchmark
+curl http://localhost:8000/v1/benchmark   # public, no key needed
+curl -X POST http://localhost:8000/v1/audit \
+  -H "X-API-Key: sk_live_replace_me" -H "content-type: application/json" \
+  -d '{"feature_names": ["f0"], "X": [[0.0]], "y": [0], "coords_xy": [[0.0, 0.0]]}'
 ```
 
-Interactive documentation at `/docs`. Endpoints: `/v1/health`, `/v1/benchmark`, `/v1/audit`.
+Interactive documentation at `/docs`. Endpoints: `/v1/health`, `/v1/benchmark` (both public,
+no key needed -- the reproducibility check in this README works with no signup). `/v1/audit`
+and `/v1/score` require an `X-API-Key` header and are rate-limited per key; `GEOMINE_API_KEYS`
+is a comma-separated `id:secret` list (e.g. `acme:sk_live_abc,beta:sk_live_def`) and
+`GEOMINE_RATE_LIMIT_PER_MINUTE` overrides the default per-key limit. If `GEOMINE_API_KEYS` is
+unset, both endpoints return 503 rather than silently allowing unauthenticated access.
 `/v1/score` returns 501 -- concession scoring is currently delivered as a per-engagement
 service rather than self-serve, because it requires deployed models and cached feature rasters.
 
@@ -128,7 +137,7 @@ service rather than self-serve, because it requires deployed models and cached f
 | Class prior baseline | 0.226 |
 | Labelled deposits | 17 |
 | Geographic extent | Great Dyke, Zimbabwe -- 4 Sentinel-2 tiles |
-| Model | Prithvi-EO-2.0 ViT, fine-tuned |
+| Model | ImageNet-pretrained ViT-Small + six-band input adapter -- **not** Prithvi-EO-2.0 |
 
 **How much weight this number carries.** It rests on 17 labelled deposits in a single geology.
 That is enough to demonstrate that cross-tile signal exists where our earlier spectral models
@@ -136,6 +145,13 @@ had none. It is not enough to quote to three decimal places with confidence, and
 uncertainty interval around it is wide. Treat it as a promising research result rather than a
 production guarantee, and see [BENCHMARK.md](BENCHMARK.md) for full history including the
 configurations that failed.
+
+**What produced it.** An ImageNet-pretrained ViT-Small with a six-band input adapter
+(`scripts/run_prithvi_loto.py` -- the filename predates the correction). Earlier drafts of these
+materials named Prithvi-EO-2.0; that was inaccurate, and [CLAIMS_AUDIT.md](CLAIMS_AUDIT.md)
+records why. Prithvi is an intended future backbone, not something already integrated. The
+practical consequence is that this cross-tile signal comes from spatial context alone, with no
+Earth-observation pre-training behind it -- which we read as a lower bound rather than a ceiling.
 
 ### Reproducing it
 

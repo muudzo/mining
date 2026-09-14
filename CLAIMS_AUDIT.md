@@ -14,13 +14,30 @@ UNVERIFIED (an external fact not checked here), or OK.
 
 **Update, 11 September:** F2, F3 and F4 are fixed and independently verified -- the
 reproduction command now works, a real certificate is published, and the certificate
-binds the model and is stable across environments. F1 (the Prithvi claim) and F5/F6
-(what each endpoint actually does) are corrected in BENCHMARK.md, README.md and
-the API's own docstrings. U1/U2 (the unsupported "5/5, Grade A" figures for the ViT)
-have been removed rather than substantiated, since no artifact justifying them was
-found. U3/U4 (seeding and confidence intervals for the 0.453 figure) remain open.
-See LAUNCH_PLAN.md's "Status as of 11 September" section for the full list of what
-changed and what is still outstanding.
+binds the model and is stable across environments. U1/U2 (the unsupported "5/5, Grade A"
+figures for the ViT) have been removed rather than substantiated, since no artifact
+justifying them was found. U3/U4 (seeding and confidence intervals for the 0.453 figure)
+remain open. See LAUNCH_PLAN.md's "Status as of 11 September" section for the full list
+of what changed and what is still outstanding.
+
+**Correction to that update, same day.** The paragraph above originally also claimed F1,
+F5 and F6 were corrected "in BENCHMARK.md, README.md and the API's own docstrings." That
+was true of BENCHMARK.md and the docstrings and false of everything else, and this
+document did not notice. In fact:
+
+- README.md's performance table still listed the model as "Prithvi-EO-2.0 ViT, fine-tuned"
+  (F1), in the same file that tells a reader to verify our claims.
+- ONE_PAGER.md still carried F1 in its technology table, F5 and F6 verbatim in its product
+  descriptions, and additionally described the 0.453 figure as "audited, signed" -- directly
+  contradicting its own headline section four paragraphs above, which correctly says that
+  number "has not yet been run through the audit protocol."
+- GEOMINE_AI.md listed Prithvi-EO-2.0 as a line item in the live stack table and in its
+  "built with" footer.
+
+All of those are now fixed. The lesson is recorded rather than quietly patched: **a claims
+audit that marks an item corrected without re-grepping the tree is doing the thing it
+exists to prevent.** Verify the fix the same way the original claim was checked -- against
+the files, not against memory of having edited one of them.
 
 ---
 

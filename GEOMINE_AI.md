@@ -4,6 +4,14 @@
 **Version:** 2.0
 **Status:** Phase 2a complete, Phase 2b (Foundation Models) ready to execute
 
+> **Superseded in part, 11 September 2026.** This is an April document, kept as written except
+> where it stated something factually false. Two things have changed since. Phase 2b has run --
+> using an ImageNet-pretrained ViT-Small, **not** Prithvi-EO-2.0, which was never integrated
+> (see [CLAIMS_AUDIT.md](CLAIMS_AUDIT.md) F1). And the lead product is now the audit protocol,
+> not targeting. Where this file says "Prithvi next," read it as what was believed in April,
+> not as a description of what was built. For current verified numbers see
+> [BENCHMARK.md](BENCHMARK.md); for the current plan see [LAUNCH_PLAN.md](LAUNCH_PLAN.md).
+
 *See also: [INVESTOR_DECK.md](INVESTOR_DECK.md) | [ONE_PAGER.md](ONE_PAGER.md)*
 
 ---
@@ -164,7 +172,7 @@ Layer 2: Feature Computation     Spectral indices, terrain, structural, mineral
           |                      (any index recipe can be added)
 Layer 3: Validation Framework    LOTO CV, geo-block CV, along-strike CV, leakage guards
           |                      (this is the moat)
-Layer 4: Model Backend           LR/XGBoost (Phase 1) -> Prithvi ViT (Phase 2)
+Layer 4: Model Backend           LR/XGBoost (Phase 1) -> ViT-Small (Phase 2)
           |                      (any backbone can be swapped)
 Layer 5: Prediction + Targeting  Probability maps, uncertainty, attention maps
 ```
@@ -219,7 +227,7 @@ This is niche, defensible, and requires no cross-tile PR-AUC number.
 
 2. **The honest negative result is an asset.** We tested 8 configurations and proved that Sentinel-2 spectral indices cannot map PGM deposits across tiles. This eliminates a class of competitors who claim otherwise without rigorous validation.
 
-3. **The foundation model recipe is proprietary.** Prithvi-EO-2.0 is public, but the fine-tuning approach (which bands, what normalization, what chip size, what augmentation, what segmentation head) is our IP.
+3. **The fine-tuning recipe is proprietary.** The backbones themselves are public, but the adaptation approach (which bands, what normalization, what chip size, what augmentation, what head) is our IP. Note this is currently a ViT-Small recipe, not a Prithvi one -- Prithvi is an intended backbone, not an integrated one.
 
 4. **The drill hole classification algorithm has no precedent.** Using Mahalanobis spectral distance + structural proximity + cluster density to classify drill holes without assay data is novel.
 
@@ -237,7 +245,7 @@ This is niche, defensible, and requires no cross-tile PR-AUC number.
 | Geological context | Macrostrat API | Free |
 | Structural geology | GEM Active Faults (GitHub) | Free |
 | ML framework | scikit-learn, XGBoost | Free |
-| Foundation model | Prithvi-EO-2.0 (NASA/IBM) | Free |
+| Vision backbone | ViT-Small, ImageNet-pretrained via `timm` (Prithvi-EO-2.0 intended, not yet integrated) | Free |
 | Fine-tuning compute | Google Colab T4 GPU | Free (or $10/mo Pro) |
 | GIS processing | GDAL, rasterio, geopandas | Free |
 | Language | Python 3.11 | Free |
@@ -305,5 +313,5 @@ The only question left is whether Prithvi's spatial intelligence can see what lo
 
 ---
 
-*Built with: Python, GDAL, rasterio, scikit-learn, Prithvi-EO-2.0, Sentinel-2, ASTER, Copernicus DEM*
+*Built with: Python, GDAL, rasterio, scikit-learn, timm (ViT-Small), Sentinel-2, ASTER, Copernicus DEM*
 *Total development cost: $0 in data/compute, 100% open-source stack*

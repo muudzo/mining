@@ -35,6 +35,16 @@ Thumbs.db
 # Jupyter
 .ipynb_checkpoints/
 
+# Test artifacts
+.coverage
+.coverage.*
+.pytest_cache/
+
+# Default output of `geomine audit` -- anyone following the README quickstart
+# generates these in the repo root; the published artifacts live in benchmark/
+audit_report.md
+audit.json
+
 # Secrets
 .env
 *.token

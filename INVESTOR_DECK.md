@@ -2,6 +2,18 @@
 
 *15 slides. Founder-level positioning. One metric that matters.*
 
+> **Written April 2026. Superseded in part -- do not send this without
+> [BENCHMARK.md](BENCHMARK.md) beside it.**
+>
+> This deck predates Phase 2, and two of its load-bearing claims are no longer the position.
+> **Slide 7** argues the foundation-model thesis from Prithvi-EO-2.0's Earth-observation
+> pre-training; the Phase 2 run that produced the cross-tile result actually used an
+> ImageNet-pretrained ViT-Small, and Prithvi was never integrated, so that specific mechanism
+> describes nothing that has been built or measured ([CLAIMS_AUDIT.md](CLAIMS_AUDIT.md) F1).
+> **The lead product has also changed** -- the company now leads with the audit protocol rather
+> than targeting ([LAUNCH_PLAN.md](LAUNCH_PLAN.md)). Slide 7 is retained as the original
+> hypothesis, not as a claim about the stack.
+
 ---
 
 ## Slide 1: The Problem

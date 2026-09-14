@@ -24,9 +24,9 @@ established about it.
 
 Two products built on the same pipeline:
 
-**1. Targeting.** `POST /v1/score` takes a concession boundary, returns ranked prospectivity zones with confidence scores. Built from free Sentinel-2 + ASTER + DEM, no fieldwork.
+**1. Targeting.** Ranked prospectivity zones for a concession, built from free Sentinel-2 + ASTER + DEM, no fieldwork. Delivered today as a scoped engagement, not self-serve: `POST /v1/score` is a documented 501 until deployed models and cached feature rasters exist.
 
-**2. Audit.** `POST /v1/audit` (or `geomine audit` CLI) takes any binary classifier + labelled dataset and runs the GeoMine validation protocol: spatial leakage, class-prior baseline, bootstrap stability, calibration, feature-label leakage. Returns a content-addressed certificate. Same data + same model = same hash.
+**2. Audit.** `geomine audit` (CLI) takes any sklearn-compatible binary classifier + labelled dataset and runs the GeoMine validation protocol: spatial leakage, class-prior baseline, bootstrap stability, calibration, feature-label leakage. Returns a content-addressed certificate -- same data + same model = same hash. `POST /v1/audit` runs that protocol against a logistic-regression baseline on data you submit, so the hosted endpoint grades your *dataset* for leakage; grading your own model file is the CLI path.
 
 ## Who Pays For This
 
@@ -48,7 +48,7 @@ Two products built on the same pipeline:
 
 ## Why It's Credible
 
-We tested 8 model configurations. Phase 1 collapsed under leave-one-tile-out CV (PR-AUC 0.228, random baseline 0.226 -- no skill). We documented this publicly. Phase 2 closed the gap: 0.453 LOTO, audited, signed.
+We tested 8 model configurations. Phase 1 collapsed under leave-one-tile-out CV (PR-AUC 0.228, random baseline 0.226 -- no skill). We documented this publicly. Phase 2 narrowed the gap to 0.453 LOTO -- a research result we have deliberately **not** signed, because our own protocol cannot yet accept a PyTorch model. The certificate above covers the protocol benchmark, not that number. We would rather say so than borrow the credibility.
 
 **Most mining AI hides failure. We shipped it as a product feature.**
 
@@ -60,7 +60,7 @@ The audit module that caught our own failure is the same module we sell to grade
 |---|---|
 | Data | ESA Sentinel-2 + NASA ASTER + Copernicus DEM (free) |
 | Processing | 7,000 lines Python (GDAL, rasterio, geopandas) |
-| ML backend | Logistic regression baseline + Prithvi-EO-2.0 ViT (NASA/IBM) |
+| ML backend | Logistic regression baseline + ImageNet-pretrained ViT-Small, six-band adapter (**not** Prithvi-EO-2.0 -- see [BENCHMARK.md](BENCHMARK.md)) |
 | Validation | `geomine.audit` -- LOTO CV + bootstrap + leakage detection + content-addressed certificates |
 | API | FastAPI (`/v1/score`, `/v1/audit`, `/v1/benchmark`) |
 
