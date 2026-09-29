@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; base-uri 'none'; form-action 'none'; object-src 'none'">
+  <title>GeoMine Audit</title>
+  <meta name="description" content="An audit for mineral-targeting models that anyone can re-run. Five tests, public thresholds, and a certificate you can re-derive on your own machine.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,600;1,6..72,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+  <link rel="stylesheet" href="styles.css">
+  <script src="copy.js" defer></script>
+</head>
+<body>
+  <header class="masthead">
+    <p class="wordmark">GeoMine <span>Audit</span></p>
+    <nav aria-label="Page sections">
+      <a href="#run">Run it</a>
+      <a href="#tests">The tests</a>
+      <a href="#sample">Sample report</a>
+      <a href="#contact">Contact</a>
+    </nav>
+  </header>
+
+  <main>
+    <section class="hero" aria-labelledby="hero-heading">
+      <p class="eyebrow">Great Dyke, Zimbabwe · Phase 1 · leave-one-tile-out cross-validation</p>
+      <h1 id="hero-heading">Our mineral model scored <span class="num">0.841</span>.
+        Tested honestly, it scored <span class="num num--fail">0.228</span>.</h1>
+      <div class="hero-body">
+        <p class="lede">Chance was <span class="num">0.226</span>. The model had learned where it had
+          already looked, not where deposits are. Random cross-validation hid that. Spatial
+          cross-validation exposed it.</p>
+        <p>So we built the test that caught us and published it. GeoMine audits
+          exploration models for the ways they flatter themselves, and signs the result with a
+          certificate you can re-derive on your own machine.</p>
+      </div>
+      <figure class="collapse" aria-label="PR-AUC under two validation schemes">
+        <div class="bar-row">
+          <span class="bar-label">Random CV</span>
+          <span class="bar"><span class="bar-fill v-841"></span></span>
+          <span class="bar-value">0.841</span>
+        </div>
+        <div class="bar-row">
+          <span class="bar-label">Leave-one-tile-out</span>
+          <span class="bar"><span class="bar-fill bar-fill--fail v-228"></span></span>
+          <span class="bar-value">0.228</span>
+        </div>
+        <div class="bar-row bar-row--prior">
+          <span class="bar-label">Chance (class prior)</span>
+          <span class="bar"><span class="bar-fill bar-fill--prior v-226"></span></span>
+          <span class="bar-value">0.226</span>
+        </div>
+        <figcaption>PR-AUC, 12 labelled deposits. Full account in
+          <a href="https://github.com/muudzo/mining/blob/main/PHASE1_POSTMORTEM.md">the post-mortem</a>.</figcaption>
+      </figure>
+    </section>
+
+    <section class="run" id="run" aria-labelledby="run-heading">
+      <h2 id="run-heading">One command. One exact hash.</h2>
+      <p>The protocol runs on 17 real, named Great Dyke deposits. Run it anywhere and you get the
+        same certificate we publish. The hash covers the protocol version, the model, the data and
+        the quantised scores, so it won't drift between machines.</p>
+      <div class="terminal">
+        <div class="terminal-bar">
+          <span>shell</span>
+          <button type="button" class="copy" data-copy="cmd">Copy</button>
+        </div>
+<pre id="cmd"><code>git clone https://github.com/muudzo/mining.git &amp;&amp; cd mining
+pip install -e ".[api,audit]"
+geomine audit benchmark/dataset.parquet benchmark/model.joblib --block-size-km 25.0</code></pre>
+      </div>
+      <div class="certificate">
+        <p class="certificate-label">You should see</p>
+        <p class="hash"><code>c8bd3fd20d7f29186f447ce05942ead8083495a70787f75365ad37767ed2100b</code></p>
+      </div>
+    </section>
+
+    <section class="tests" id="tests" aria-labelledby="tests-heading">
+      <h2 id="tests-heading">Five tests. Public thresholds.</h2>
+      <ol class="test-list">
+        <li class="test test--gate">
+          <h3>Spatial leakage</h3>
+          <p>Does the score collapse when nearby points can't leak between training and testing?
+            The failure above. Failing it caps the grade at D.</p>
+          <p class="threshold">gap &lt; 0.30</p>
+        </li>
+        <li class="test">
+          <h3>Beats chance</h3>
+          <p>Is spatial-CV PR-AUC better than picking locations at random?</p>
+          <p class="threshold">&gt; class prior</p>
+        </li>
+        <li class="test">
+          <h3>Bootstrap stability</h3>
+          <p>Do the model's feature effects hold their direction across resamples?</p>
+          <p class="threshold">≥ 0.50</p>
+        </li>
+        <li class="test">
+          <h3>Calibration</h3>
+          <p>When the model says 30%, is it right about 30% of the time?</p>
+          <p class="threshold">ECE &lt; 0.10</p>
+        </li>
+        <li class="test test--gate">
+          <h3>Feature–label leakage</h3>
+          <p>Is any input a disguised copy of the answer? Failing it also caps the grade at D.</p>
+          <p class="threshold">|r| &lt; 0.95</p>
+        </li>
+      </ol>
+      <p class="source">The protocol is open source:
+        <a href="https://github.com/muudzo/mining/blob/main/geomine/audit/core.py"><code>geomine/audit/core.py</code></a>.</p>
+    </section>
+
+    <section class="sample" id="sample" aria-labelledby="sample-heading">
+      <div class="sample-copy">
+        <h2 id="sample-heading">Grade A. Which is not praise.</h2>
+        <p>The sample report audits our own benchmark model. It passes all five tests, and the
+          report still says plainly that the model is weak: spatial PR-AUC of 0.144 against a
+          chance level of 0.124.</p>
+        <p>A grade tells you the number is honest. What the number is worth is a separate
+          question, and the report answers it in plain language.</p>
+        <a class="button" href="https://github.com/muudzo/mining/blob/main/collateral/sample_audit_report.md">Read the sample report</a>
+      </div>
+      <aside class="not-certified" aria-labelledby="not-heading">
+        <h3 id="not-heading">What an audit does not certify</h3>
+        <ul>
+          <li>That drilling will find anything</li>
+          <li>That a result transfers to another geology</li>
+          <li>That your labels are unbiased</li>
+          <li>Anything a Competent or Qualified Person signs</li>
+        </ul>
+      </aside>
+    </section>
+
+    <section class="contact" id="contact" aria-labelledby="contact-heading">
+      <h2 id="contact-heading">Have a model you'd like audited?</h2>
+      <p>Or one you doubt? Write to the founder directly.</p>
+      <a class="button button--primary" href="mailto:tatendawalter62@gmail.com?subject=GeoMine%20audit">tatendawalter62@gmail.com</a>
+    </section>
+  </main>
+
+  <footer class="colophon">
+    <p>GeoMine · <a href="https://github.com/muudzo/mining">Source</a> ·
+      <a href="https://github.com/muudzo/mining/blob/main/CLAIMS_AUDIT.md">Our audit of our own claims</a></p>
+  </footer>
+</body>
+</html>

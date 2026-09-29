@@ -16,3 +16,22 @@ services:
         sync: false
       - key: GEOMINE_RATE_LIMIT_PER_MINUTE
         value: "10"
+
+  # The landing page: plain static files from site/, no build step. Static sites
+  # don't sleep, unlike the free web service above.
+  - type: web
+    name: geomine-site
+    runtime: static
+    branch: main
+    buildCommand: echo "static site, nothing to build"
+    staticPublishPath: ./site
+    headers:
+      - path: /*
+        name: X-Content-Type-Options
+        value: nosniff
+      - path: /*
+        name: X-Frame-Options
+        value: DENY
+      - path: /*
+        name: Referrer-Policy
+        value: strict-origin-when-cross-origin
