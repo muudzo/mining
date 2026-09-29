@@ -1,0 +1,18 @@
+# Render Blueprint for the hosted GeoMine audit API.
+# Create it once from the Render dashboard (New > Blueprint > this repo); after that,
+# every push to main redeploys.
+services:
+  - type: web
+    name: geomine-api
+    runtime: docker
+    plan: free
+    branch: main
+    healthCheckPath: /v1/health
+    autoDeploy: true
+    envVars:
+      # key_id:secret pairs, comma-separated (see geomine/api/auth.py).
+      # sync: false means Render prompts for the value; it is never stored in this repo.
+      - key: GEOMINE_API_KEYS
+        sync: false
+      - key: GEOMINE_RATE_LIMIT_PER_MINUTE
+        value: "10"
